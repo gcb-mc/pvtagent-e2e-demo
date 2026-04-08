@@ -173,6 +173,7 @@ az group delete --name $RESOURCE_GROUP --yes --no-wait
 ## Origin
 
 This repo is derived from [microsoft-foundry/foundry-samples](https://github.com/microsoft-foundry/foundry-samples), specifically the `infrastructure/infrastructure-setup-bicep/19-hybrid-private-resources-agent-setup` template. The original template provides the VNet, private endpoints, AI Services account, and Data Proxy configuration. This repo adds the MCP server deployment, Key Vault integration, and end-to-end test suite.
+This repo also used [mcp-server template](https://github.com/mattfeltonma/python-basic-as-hell-mcp-server), from Microsoft CSA Matt Felton, who I bothered for a lot of questions on how to do this whole setup so thanks to him!
 
 ## License
 
