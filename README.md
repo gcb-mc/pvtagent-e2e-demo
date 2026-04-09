@@ -1,4 +1,4 @@
-# pvtagent-e2e-demo
+# Agent via Private Networking: e2e-demo
 
 End-to-end lab for deploying and testing a **fully private MCP server** integrated with **Azure AI Foundry agents**. Built on top of [Foundry Samples Template 19 (Hybrid Private Resources Agent Setup)](https://github.com/microsoft-foundry/foundry-samples/tree/main/infrastructure/infrastructure-setup-bicep/19-hybrid-private-resources-agent-setup).
 
