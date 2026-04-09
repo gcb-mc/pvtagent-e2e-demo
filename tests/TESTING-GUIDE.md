@@ -19,7 +19,7 @@ This guide covers testing Azure AI Foundry agents with tools that access private
 9. [Step 6: VM-Based VNet Testing](#step-6-vm-based-vnet-testing)
 10. [Troubleshooting](#troubleshooting)
 11. [Test Results Summary](#test-results-summary)
-12. [Dummy Guide](scroll to the bottom!)
+12. [Dummy Guide](#Dummy-proof Guide)
 
 ---
 
