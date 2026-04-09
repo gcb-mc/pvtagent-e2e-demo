@@ -19,6 +19,7 @@ This guide covers testing Azure AI Foundry agents with tools that access private
 9. [Step 6: VM-Based VNet Testing](#step-6-vm-based-vnet-testing)
 10. [Troubleshooting](#troubleshooting)
 11. [Test Results Summary](#test-results-summary)
+12. [Dummy Guide](scroll to the bottom!)
 
 ---
 
@@ -662,7 +663,7 @@ curl.exe -sk -X POST "https://${AI_SEARCH_NAME}.search.windows.net/indexes/test-
 ```
 - You should see data.count of 1 with value of test document string.
 
-7. Disable public access. Don't forget this part!
+4. b. Disable public access. Don't forget this part!
 ```
 az search service update -g $RG -n $AI_SEARCH_NAME --public-network-access disabled -o none
 ```
