@@ -54,7 +54,7 @@ def create_agent_client(project_endpoint: str):
 
 def run_single_query(project_endpoint: str, mcp_url: str, model: str, query: str) -> bool:
     """Run a single agent query with the MCP tool. Returns True on success."""
-    from azure.ai.projects.models import MCPTool
+    from azure.ai.projects.models import MCPTool, PromptAgentDefinition
 
     logger.info("Creating AI Project client (managed identity)...")
     client, _ = create_agent_client(project_endpoint)
@@ -73,52 +73,55 @@ def run_single_query(project_endpoint: str, mcp_url: str, model: str, query: str
         require_approval="never",
     )
 
-    agent = client.agents.create_agent(
-        model=model,
-        name="mcp-vm-test-agent",
-        instructions="You are a helpful assistant. Use the MCP tools to answer questions.",
-        tools=mcp_tool.definitions,
-        headers={"x-ms-enable-preview": "true"},
-    )
-    logger.info(f"  Agent ID: {agent.id}")
+    with client:
+        openai_client = client.get_openai_client()
+        with openai_client:
+            agent = client.agents.create_version(
+                agent_name="mcp-vm-test-agent",
+                definition=PromptAgentDefinition(
+                    model=model,
+                    instructions="You are a helpful assistant. Use the MCP tools to answer questions.",
+                    tools=[mcp_tool],
+                ),
+            )
+            logger.info(f"  Agent ID: {agent.id}")
 
-    try:
-        # Create thread and run
-        thread = client.agents.threads.create()
-        client.agents.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=query,
-        )
+            # Create a conversation
+            conversation = openai_client.conversations.create()
+            logger.info(f"Running query: '{query}'")
 
-        logger.info(f"Running query: '{query}'")
-        run = client.agents.runs.create_and_process(
-            thread_id=thread.id,
-            agent_id=agent.id,
-            tool_resources=mcp_tool.resources,
-        )
+            # Send request
+            response = openai_client.responses.create(
+                conversation=conversation.id,
+                input=query,
+                extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
+            )
 
-        if run.status != "completed":
-            logger.error(f"  ✗ Run status: {run.status}")
-            if run.last_error:
-                logger.error(f"    Error: {run.last_error}")
-            return False
+            # Handle MCP approval if needed
+            for item in response.output:
+                if hasattr(item, 'type') and item.type == "mcp_approval_request":
+                    from openai.types.responses import ResponseInputParam
+                    from openai.types.responses.response_input_param import McpApprovalResponse
+                    input_list = [
+                        McpApprovalResponse(
+                            type="mcp_approval_response",
+                            approve=True,
+                            approval_request_id=item.id,
+                        )
+                    ]
+                    response = openai_client.responses.create(
+                        input=input_list,
+                        previous_response_id=response.id,
+                        extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
+                    )
 
-        # Get response
-        messages = client.agents.messages.list(thread_id=thread.id)
-        for msg in messages.data:
-            if msg.role == "assistant":
-                for block in msg.content:
-                    if hasattr(block, "text"):
-                        logger.info(f"  ✓ Response: {block.text.value[:300]}")
-                        return True
-
-        logger.error("  ✗ No assistant response found")
-        return False
-
-    finally:
-        client.agents.delete_agent(agent.id)
-        logger.info("  Agent cleaned up")
+            output_text = response.output_text
+            if output_text:
+                logger.info(f"  ✓ Response: {output_text[:300]}")
+                return True
+            else:
+                logger.error("  ✗ No output text in response")
+                return False
 
 
 def run_interactive(project_endpoint: str, mcp_url: str, model: str):

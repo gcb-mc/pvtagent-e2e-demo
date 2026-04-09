@@ -32,6 +32,9 @@ import urllib.request
 logger = logging.getLogger(__name__)
 
 
+_session_id = None  # MCP session ID for Streamable HTTP transport
+
+
 def mcp_post(url: str, payload: dict, timeout: int = 30) -> dict:
     """
     Send a JSON-RPC request to the MCP endpoint.
@@ -39,21 +42,34 @@ def mcp_post(url: str, payload: dict, timeout: int = 30) -> dict:
     Handles two response formats:
       - SSE (text/event-stream): parses 'data:' lines for JSON
       - Plain JSON: parses body directly
+
+    Automatically captures and forwards the mcp-session-id header
+    required by Streamable HTTP transport.
     """
+    global _session_id
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        },
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if _session_id:
+        headers["mcp-session-id"] = _session_id
+
+    req = urllib.request.Request(url, data=data, headers=headers)
     ctx = ssl.create_default_context()
 
     with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+        # Capture session ID from response
+        sid = resp.headers.get("mcp-session-id")
+        if sid:
+            _session_id = sid
+
         content_type = resp.headers.get("Content-Type", "")
         body = resp.read().decode("utf-8")
+
+        # Notifications (no "id" field) may return empty body (202 Accepted)
+        if not body.strip():
+            return {}
 
         if "text/event-stream" in content_type:
             # SSE: extract last 'data:' line containing JSON
@@ -70,6 +86,8 @@ def mcp_post(url: str, payload: dict, timeout: int = 30) -> dict:
 
 def run_test(mcp_url: str) -> bool:
     """Run the 3-step MCP connectivity test. Returns True on success."""
+    global _session_id
+    _session_id = None  # Reset session for each test run
     results = {"initialize": False, "tools_list": False, "tools_call": False}
 
     # --- Step 1: Initialize ---
