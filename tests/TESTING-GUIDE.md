@@ -582,3 +582,126 @@ This is expected when network injection is configured. Use SDK testing instead -
 # Delete all resources including the resource group
 az group delete --name $RESOURCE_GROUP --yes --no-wait
 ```
+
+## Dummy-proof Guide
+### For vibe coders like me, here's quick guide with step by step instructions to TEST this from VS Code.
+Note: I actually wrote this guide, with assistance from AI. The rest of this repo was pretty much fully written by AI; so hopefully the below part ACTUALLY works for you like it did for me #goodluck.
+
+0. Step 0. Open Terminal (powershell) and do 'az login'. Set the variables that will be used in subsequent commands. Obviously, switch with your resource group name and virtual machine name. Run each of the parts in below code to save variables.
+```
+# Resource group
+$RG = "rg-hybrid-agent-test"
+$VM = "test-vm"
+
+# Discover resource names
+$AI_SERVICES = az cognitiveservices account list -g $RG --query "[0].name" -o tsv
+$AI_ENDPOINT = az cognitiveservices account show -g $RG -n $AI_SERVICES --query "properties.endpoint" -o tsv
+$AI_SEARCH_NAME = az search service list -g $RG --query "[0].name" -o tsv
+$MCP_FQDN = az containerapp show -g $RG -n mcp-http-server --query "properties.configuration.ingress.fqdn" -o tsv
+
+# Construct URLs
+$MCP_URL = "https://$MCP_FQDN/mcp"
+
+# Discover project name
+$PROJECT_NAME = az resource list -g $RG --query "[?contains(type,'CognitiveServices/accounts/projects')].name | [0]" -o tsv
+# PROJECT_NAME will be like "aiservicesk5sg/projectk5sg" — extract the project part
+$PROJECT_SHORT = ($PROJECT_NAME -split "/")[1]
+$PROJECT_ENDPOINT = "${AI_ENDPOINT}api/projects/$PROJECT_SHORT"
+
+# Discover model deployment
+$MODEL = az cognitiveservices account deployment list -g $RG -n $AI_SERVICES --query "[0].name" -o tsv
+
+# Print everything
+Write-Host "AI_SERVICES      = $AI_SERVICES"
+Write-Host "AI_SEARCH_NAME   = $AI_SEARCH_NAME"
+Write-Host "MCP_URL          = $MCP_URL"
+Write-Host "PROJECT_ENDPOINT = $PROJECT_ENDPOINT"
+Write-Host "MODEL            = $MODEL"
+```
+1. Step 1. Verify private endpoints exist. 
+```
+az network private-endpoint list -g $RG -o table
+```
+- Should show succeeded for 4 private endpoints: AI Services, AI Search, Cosmos DB, Storage.
+
+2. Verify MCP server container app is running.
+```
+az containerapp show -g $RG -n mcp-http-server --query "properties.runningStatus" -o json
+```
+- Should show "Running" and you're good!
+
+3. Verify VM exists with managed identity and correct RBAC.
+```
+az vm identity show -g $RG -n $VM -o json #check identity
+```
+``` 
+# check RBAC
+$PRINCIPAL_ID = az vm identity show -g $RG -n $VM --query "principalId" -o tsv
+az role assignment list --assignee $PRINCIPAL_ID --all -o table
+```
+- Should output principal ID, tenantId, and type for this vm. RBAC should include needs Cognitive Services User + Azure AI Developer.
+
+4. Check AI Search test-index, which requires enabling public access then disabling. Create index if does not exist.
+```
+az search service update -g $RG -n $AI_SEARCH_NAME --public-network-access enabled -o none
+```
+- Should see AI_SEARCH_NAME (set up using infra modules), and then Running.. status while it enables public access. 
+- Then get admin-key to check for test-index. (Note: public enabled may take a moment to propagate)
+```
+$ADMIN_KEY = az search admin-key show -g $RG --service-name $AI_SEARCH_NAME --query "primaryKey" -o tsv
+curl.exe -sk "https://${AI_SEARCH_NAME}.search.windows.net/indexes?api-version=2023-11-01" -H "api-key: $ADMIN_KEY"
+```
+
+- Then, you should see index name and confirm there is a document, or go back to [Full Testing Guide Step 3](#step-3-create-test-data-in-ai-search) to add test document. Here's quick code to create index and test document.
+```
+# Create index
+curl.exe -sk -X POST "https://${AI_SEARCH_NAME}.search.windows.net/indexes?api-version=2023-11-01" -H "Content-Type: application/json" -H "api-key: $ADMIN_KEY" -d '{\"name\":\"test-index\",\"fields\":[{\"name\":\"id\",\"type\":\"Edm.String\",\"key\":true},{\"name\":\"content\",\"type\":\"Edm.String\",\"searchable\":true}]}'
+
+# Add test document
+curl.exe -sk -X POST "https://${AI_SEARCH_NAME}.search.windows.net/indexes/test-index/docs/index?api-version=2023-11-01" -H "Content-Type: application/json" -H "api-key: $ADMIN_KEY" -d '{\"value\":[{\"@search.action\":\"upload\",\"id\":\"1\",\"content\":\"This is a test document for validating AI Search integration with Azure AI Foundry agents.\"}]}'
+```
+- You should see data.count of 1 with value of test document string.
+
+7. Disable public access. Don't forget this part!
+```
+az search service update -g $RG -n $AI_SEARCH_NAME --public-network-access disabled -o none
+```
+- Should see Running .., until confirmation returns. Following code is to double check it was disabled. #trustbutverify
+```
+az search service show -g $RG -n $AI_SEARCH_NAME --query "{publicAccess:publicNetworkAccess, status:status}" -o json
+```
+
+5. Deploy test scripts to VM. This code uses the azure control plane, but you could do this on your VM using the [VM-TESTING-GUIDE.md](VM-TESTING-GUIDE.md). Change for your path of where the tests folder and test_mcp_direct.py file is saved. (Note: Uses base64 encoding + temp file to avoid command-line length limits and quoting issues)
+```
+# Deploy test_mcp_direct.py
+$content = [System.IO.File]::ReadAllText("tests\test_mcp_direct.py")
+$b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($content))
+$scriptFile = [System.IO.Path]::GetTempFileName()
+Set-Content -Path $scriptFile -Value "echo $b64 | base64 -d > /home/azureuser/test_mcp_direct.py && echo 'DEPLOYED' && wc -l /home/azureuser/test_mcp_direct.py"
+az vm run-command invoke -g $RG -n $VM --command-id RunShellScript --scripts @$scriptFile
+Remove-Item $scriptFile
+
+# Deploy test_agent_mcp.py
+$content = [System.IO.File]::ReadAllText("tests\test_agent_mcp.py")
+$b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($content))
+$scriptFile = [System.IO.Path]::GetTempFileName()
+Set-Content -Path $scriptFile -Value "echo $b64 | base64 -d > /home/azureuser/test_agent_mcp.py && echo 'DEPLOYED' && wc -l /home/azureuser/test_agent_mcp.py"
+az vm run-command invoke -g $RG -n $VM --command-id RunShellScript --scripts @$scriptFile
+Remove-Item $scriptFile
+```
+- Should see deployed and line count per source files.
+
+6. Run Test 1 - Direct MCP Connectivity
+```
+az vm run-command invoke -g $RG -n $VM --command-id RunShellScript --scripts "python3 /home/azureuser/test_mcp_direct.py --mcp-url $MCP_URL"
+```
+- Should see Steps listed, Check marks, and RESULT: PASS.
+
+7. Run Test 2 - Agent + MCP via Managed Identity
+```
+az vm run-command invoke -g $RG -n $VM --command-id RunShellScript --scripts "python3 /home/azureuser/test_agent_mcp.py --project-endpoint '$PROJECT_ENDPOINT' --mcp-url '$MCP_URL' --model '$MODEL' --query 'What is the weather in Tokyo?'"
+```
+- Should see Running.., RESULT: PASS and the agent response (real-time)!
+- Note: This test has a ~50% failure rate due to Hyena cluster routing (Data Proxy only on 1 of 2 scale units). If you get TaskCanceledException, just rerun the command.
+
+8. Pat yourself on the back, you're basically Neo, thanks for joining the journey.
