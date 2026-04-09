@@ -57,7 +57,7 @@ from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
     MCPTool,
     PromptAgentDefinition,
-    AzureAISearchAgentTool,
+    AzureAISearchTool,
     AzureAISearchToolResource,
     AISearchIndexResource,
     AzureAISearchQueryType,
@@ -341,7 +341,7 @@ def test_basic_agent():
             response = openai_client.responses.create(
                 conversation=conversation.id,
                 input="Say hello and confirm you are working. Keep it brief.",
-                extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
+                extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
             )
             log_response_info(response, "Basic Agent Response")
 
@@ -390,7 +390,7 @@ def test_ai_search_tool():
             print(f"✓ Connected to AI Project at {PROJECT_ENDPOINT}")
 
             # Create AI Search tool with SIMPLE query type (our index doesn't have vector fields)
-            search_tool = AzureAISearchAgentTool(
+            search_tool = AzureAISearchTool(
                 azure_ai_search=AzureAISearchToolResource(indexes=[
                     AISearchIndexResource(
                         project_connection_id=AI_SEARCH_CONNECTION_NAME,
@@ -420,7 +420,7 @@ def test_ai_search_tool():
             response = openai_client.responses.create(
                 conversation=conversation.id,
                 input="Search for any documents in the index and tell me what you find.",
-                extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
+                extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
             )
             log_response_info(response, "AI Search Response")
 
@@ -493,7 +493,7 @@ def test_mcp_tool_with_agent():
             response = openai_client.responses.create(
                 conversation=conversation.id,
                 input="What is the current weather in London? Use the get_weather tool.",
-                extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
+                extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
             )
             log_response_info(response, "MCP Tool Response")
 
@@ -514,7 +514,7 @@ def test_mcp_tool_with_agent():
                     response = openai_client.responses.create(
                         input=input_list,
                         previous_response_id=response.id,
-                        extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
+                        extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
                     )
 
             print(f"\n✓ Agent response: {response.output_text}")

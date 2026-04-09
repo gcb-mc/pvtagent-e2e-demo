@@ -16,8 +16,9 @@ This guide covers testing Azure AI Foundry agents with tools that access private
 6. [Step 3: Create Test Data in AI Search](#step-3-create-test-data-in-ai-search)
 7. [Step 4: Deploy MCP Server](#step-4-deploy-mcp-server)
 8. [Step 5: Test via SDK](#step-5-test-via-sdk)
-9. [Troubleshooting](#troubleshooting)
-10. [Test Results Summary](#test-results-summary)
+9. [Step 6: VM-Based VNet Testing](#step-6-vm-based-vnet-testing)
+10. [Troubleshooting](#troubleshooting)
+11. [Test Results Summary](#test-results-summary)
 
 ---
 
@@ -300,12 +301,15 @@ echo "MCP Server URL: https://${MCP_FQDN}/mcp"
 
 ## Step 5: Test via SDK
 
-Two test scripts are provided:
+Five test scripts are provided for different scenarios:
 
-| Script | Description |
-|--------|-------------|
-| `test_agents_v2.py` | Full test suite: basic agent, AI Search, MCP tools |
-| `test_mcp_tools_agents_v2.py` | Focused MCP testing: connectivity + agent test via Data Proxy |
+| Script | Description | Env Vars |
+|--------|-------------|----------|
+| `test_agents_v2.py` | Full test suite: MCP connectivity, OpenAI API, basic agent, AI Search, MCP tools (runs all 5 tests sequentially, no CLI flags) | `PROJECT_ENDPOINT`, `MCP_SERVER_URL`, `AI_SEARCH_CONNECTION_NAME` |
+| `test_mcp_tools_agents_v2.py` | Focused MCP testing: connectivity + agent test via Data Proxy (supports `--test` and `--retry`) | `PROJECT_ENDPOINT`, `MCP_SERVER_PRIVATE` |
+| `test_ai_search_tool_agents_v2.py` | Focused AI Search testing: connectivity + agent test (supports `--test` and `--retry`) | `PROJECT_ENDPOINT`, `AI_SEARCH_CONNECTION_NAME`, `AI_SEARCH_INDEX_NAME`, `AI_SEARCH_ENDPOINT` |
+| `test_mcp_direct.py` | Direct MCP HTTP connectivity test (VNet only, no Azure credentials needed) | `MCP_SERVER_URL` or `--mcp-url` |
+| `test_agent_mcp.py` | Agent + MCP test via managed identity from a VM inside the VNet | `PROJECT_ENDPOINT`, `MCP_SERVER_URL` or `--project-endpoint` / `--mcp-url` |
 
 ### 5.1 Install Dependencies
 
@@ -319,24 +323,39 @@ pip install azure-ai-projects azure-identity openai
 # Set the project endpoint (get from Azure Portal -> AI Services -> Projects -> Properties)
 export PROJECT_ENDPOINT="https://<ai-services>.services.ai.azure.com/api/projects/<project>"
 
-# Set the MCP server URL (from deploy-mcp.sh output)
+# For test_agents_v2.py (uses MCP_SERVER_URL):
+export MCP_SERVER_URL="https://<private-mcp-fqdn>/mcp"
+
+# For test_mcp_tools_agents_v2.py (uses MCP_SERVER_PRIVATE):
 export MCP_SERVER_PRIVATE="https://<private-mcp-fqdn>/mcp"
 
-# For test_agents_v2.py (uses MCP_SERVER_URL)
-export MCP_SERVER_URL="https://<private-mcp-fqdn>/mcp"
+# For AI Search tests (optional — auto-detected from project connections if not set):
+export AI_SEARCH_CONNECTION_NAME="<connection-name>"
+export AI_SEARCH_INDEX_NAME="test-index"
+# Only needed for the direct connectivity test (requires VNet access):
+export AI_SEARCH_ENDPOINT="https://<search-service>.search.windows.net"
 ```
+
+> **Note**: `test_agents_v2.py` reads `MCP_SERVER_URL` while `test_mcp_tools_agents_v2.py` reads `MCP_SERVER_PRIVATE`. Set both to the same value if running both scripts.
 
 ### 5.3 Run Full Test Suite
 
-```bash
-# Run all tests (basic agent, AI Search, MCP)
-python test_agents_v2.py
+`test_agents_v2.py` runs **all 5 tests sequentially** with no CLI flags:
 
-# Run specific test
-python test_agents_v2.py --test basic_agent
-python test_agents_v2.py --test ai_search
-python test_agents_v2.py --test mcp_tool
+```bash
+# Runs: MCP connectivity → OpenAI Responses API → Basic Agent → AI Search → MCP Tool
+python test_agents_v2.py
 ```
+
+The 5 tests in order:
+
+| # | Test | What It Validates |
+|---|------|-------------------|
+| 1 | MCP Server Connectivity | Direct HTTP session flow to MCP server (requires VNet access) |
+| 2 | OpenAI Responses API | Direct model call without an agent — verifies API access works |
+| 3 | Basic Agent | Agent creation + conversation using Responses API (no tools) |
+| 4 | AI Search Tool | Agent with AI Search tool queries private AI Search via Data Proxy |
+| 5 | MCP Tool | Agent with MCP tool calls private MCP server via Data Proxy |
 
 ### 5.4 Run MCP-Focused Tests
 
@@ -354,7 +373,23 @@ python test_mcp_tools_agents_v2.py --test private
 python test_mcp_tools_agents_v2.py --test private --retry 3
 ```
 
-### 5.5 Understanding Test Results
+### 5.5 Run AI Search-Focused Tests
+
+```bash
+# Run all AI Search tests (connectivity + agent test)
+python test_ai_search_tool_agents_v2.py
+
+# Test only direct REST API connectivity (requires VNet access + AI_SEARCH_ENDPOINT set)
+python test_ai_search_tool_agents_v2.py --test connectivity
+
+# Test only agent → AI Search via Data Proxy
+python test_ai_search_tool_agents_v2.py --test agent
+
+# With retries
+python test_ai_search_tool_agents_v2.py --retry 3
+```
+
+### 5.6 Understanding Test Results
 
 **MCP Connectivity Test**: Direct HTTP test to verify the MCP server responds correctly:
 - Sends `initialize` request and captures `mcp-session-id` header
@@ -368,6 +403,51 @@ python test_mcp_tools_agents_v2.py --test private --retry 3
 - Validates the agent returns weather data
 
 > **Known Issue**: Agent tests may fail ~50% of the time with `TaskCanceledException` due to Hyena cluster routing. The Data Proxy is only deployed on one of two scale units, and the load balancer routes in round-robin fashion. Use `--retry` to mitigate.
+
+---
+
+## Step 6: VM-Based VNet Testing
+
+For scenarios where VPN Gateway or Cloud Shell VNet integration isn't available (e.g., Conditional Access blocks `az login`), you can create a Linux VM inside the VNet and test using managed identity authentication.
+
+See [VM-TESTING-GUIDE.md](VM-TESTING-GUIDE.md) for the full walkthrough.
+
+### Quick Start
+
+```bash
+# Create test VM with managed identity and pre-installed SDK packages
+./setup-test-vm.sh --resource-group $RESOURCE_GROUP
+
+# SSH into the VM
+ssh azureuser@<vm-public-ip>
+
+# Run direct MCP connectivity test (no Azure credentials needed)
+python3 test_mcp_direct.py --mcp-url https://mcp-http-server.<env-id>.<region>.azurecontainerapps.io/mcp
+
+# Run agent + MCP test via managed identity
+python3 test_agent_mcp.py \
+  --project-endpoint https://<ai-services>.cognitiveservices.azure.com/api/projects/<project> \
+  --mcp-url https://mcp-http-server.<env-id>.<region>.azurecontainerapps.io/mcp
+
+# Interactive chat mode
+python3 test_agent_mcp.py --project-endpoint <endpoint> --mcp-url <url> --interactive
+```
+
+### VM Test Scripts
+
+| Script | Purpose | Auth |
+|--------|---------|------|
+| `test_mcp_direct.py` | Direct HTTP connectivity to MCP server (3-step JSON-RPC flow) | None (direct HTTP) |
+| `test_agent_mcp.py` | Full agent + MCP tool chain via Data Proxy | Managed Identity |
+| `setup-test-vm.sh` | Creates Ubuntu VM in `vm-subnet` with Python, SDK, and managed identity | Azure CLI (local) |
+
+> **Note**: `test_agent_mcp.py` uses the **Agents v1 API** (create_agent/threads/messages pattern) with `ManagedIdentityCredential`, while the SDK test scripts (`test_agents_v2.py`, etc.) use the **Agents v2 API** (create_version/conversations/responses pattern) with `DefaultAzureCredential`.
+
+### Reference Documentation
+
+- [VM-TESTING-GUIDE.md](VM-TESTING-GUIDE.md) — Full VM setup, SSH, and test instructions
+- [AZURE-SERVICES-AND-ROLES.md](AZURE-SERVICES-AND-ROLES.md) — Complete list of all Azure services and RBAC role assignments
+- [CLOUDSHELL-NOTEBOOK-GUIDE.md](CLOUDSHELL-NOTEBOOK-GUIDE.md) — Testing via Cloud Shell notebook
 
 ---
 
@@ -437,20 +517,26 @@ This is expected when network injection is configured. Use SDK testing instead -
 
 | Script | Purpose |
 |--------|---------|
-| `test_agents_v2.py` | Full test suite: OpenAI API, basic agent, AI Search, MCP |
-| `test_mcp_tools_agents_v2.py` | Focused MCP testing with retry support |
+| `test_agents_v2.py` | Full test suite: MCP connectivity, OpenAI API, basic agent, AI Search, MCP (5 tests, no CLI flags) |
+| `test_mcp_tools_agents_v2.py` | Focused MCP testing with `--test` and `--retry` support |
+| `test_ai_search_tool_agents_v2.py` | Focused AI Search testing with `--test` and `--retry` support |
+| `test_mcp_direct.py` | Direct MCP HTTP connectivity from VNet (no Azure credentials) |
+| `test_agent_mcp.py` | Agent + MCP via managed identity from VNet VM (v1 API, interactive mode) |
 | `deploy-mcp.sh` | Automated MCP server deployment (Steps 4.1–4.5) |
 | `teardown-mcp.sh` | MCP-only resource cleanup (keeps Bicep resources) |
+| `setup-test-vm.sh` | Creates test VM in VNet with managed identity and SDK packages |
 
 ### Validated ✅
 
-| Test | Status | Notes |
-|------|--------|-------|
-| OpenAI Responses API (direct) | ✅ Pass | Works from anywhere |
-| Basic Agent (no tools) | ✅ Pass | Works from anywhere |
-| AI Search Tool | ✅ Pass | Data Proxy routes to private endpoint |
-| MCP Connectivity (direct HTTP) | ✅ Pass | Server responds with `get_weather` tool |
-| MCP Tool via Agent (private server) | ✅ Pass* | *~50% fail rate due to Hyena routing |
+| Test | Script | Status | Notes |
+|------|--------|--------|-------|
+| OpenAI Responses API (direct) | `test_agents_v2.py` | ✅ Pass | Works from anywhere (public access) |
+| Basic Agent (no tools) | `test_agents_v2.py` | ✅ Pass | Works from anywhere (public access) |
+| AI Search Tool via Agent | `test_agents_v2.py`, `test_ai_search_tool_agents_v2.py` | ✅ Pass | Data Proxy routes to private endpoint |
+| MCP Connectivity (direct HTTP) | `test_agents_v2.py`, `test_mcp_tools_agents_v2.py`, `test_mcp_direct.py` | ✅ Pass | Server responds with `get_weather` tool |
+| MCP Tool via Agent (private) | `test_agents_v2.py`, `test_mcp_tools_agents_v2.py` | ✅ Pass* | *~50% fail rate due to Hyena routing |
+| MCP Direct from VM | `test_mcp_direct.py` | ✅ Pass | Requires VM in VNet (no credentials) |
+| Agent + MCP from VM | `test_agent_mcp.py` | ✅ Pass | Uses managed identity (v1 API) |
 
 ### Known Limitations ⚠️
 
@@ -470,6 +556,13 @@ This is expected when network injection is configured. Use SDK testing instead -
 4. **Use `/mcp` endpoint** - FastMCP exposes streamable-http at `/mcp` by default.
 
 5. **Secrets in Key Vault** - The `WEATHER_API_KEY` is stored in Key Vault and referenced by the Container App via a managed identity, not plain environment variables.
+
+### SDK Notes ⚠️
+
+- **SDK version**: These scripts require `azure-ai-projects >= 2.0.1`.
+- **Class rename**: `AzureAISearchAgentTool` was renamed to `AzureAISearchTool` in SDK v2.0.1. Scripts have been updated accordingly.
+- **Deprecated `extra_body` key**: The `"agent"` key in `extra_body` was deprecated in favor of `"agent_reference"`. Scripts have been updated to use `extra_body={"agent_reference": {"name": ..., "type": "agent_reference"}}`.
+- **VM scripts use v1 API**: `test_agent_mcp.py` uses the Agents v1 API (`create_agent`/`threads`/`messages`) with `ManagedIdentityCredential`, since VM environments may not support `DefaultAzureCredential` interactive flows.
 
 ---
 

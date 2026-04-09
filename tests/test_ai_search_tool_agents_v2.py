@@ -43,7 +43,7 @@ logging.getLogger("azure.identity").setLevel(logging.WARNING)
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
-    AzureAISearchAgentTool,
+    AzureAISearchTool,
     AzureAISearchToolResource,
     AISearchIndexResource,
     AzureAISearchQueryType,
@@ -218,7 +218,7 @@ def test_ai_search_tool_via_agent():
             print(f"✓ Connected to AI Project at {PROJECT_ENDPOINT}")
 
             # Create AI Search tool with SIMPLE query type
-            search_tool = AzureAISearchAgentTool(
+            search_tool = AzureAISearchTool(
                 azure_ai_search=AzureAISearchToolResource(indexes=[
                     AISearchIndexResource(
                         project_connection_id=AI_SEARCH_CONNECTION_NAME,
@@ -252,7 +252,7 @@ def test_ai_search_tool_via_agent():
             response = openai_client.responses.create(
                 conversation=conversation.id,
                 input="Search for any documents in the index and tell me what you find. List any document titles or content you discover.",
-                extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
+                extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
             )
             log_response_info(response, "AI Search Response")
 
